@@ -23,6 +23,12 @@ Run `python kv-server/scripts/benchmark.py --binary target/release/monoio-kv-ser
 
 ## Evidence
 
+The longer native campaign is maintained in `kv-server/scripts/campaign.py` with
+the stdlib Go client `load.go`. Its frozen workloads, correctness checks,
+histogram precision, resource accounting and reproduction are in
+`kv-server/BENCHMARK.md`. Run the client `-self-test` before a campaign; use the
+manual `metrics.yml` workflow. Keep traced runs separate from measured trials.
+
 The verification JSON, server logs, and benchmark JSON with raw latency samples go under `reports/evidence/`. Preserve these files after cleanup. A proof must include the real binary's `READY driver=io_uring` line, the harness actions and assertions, final result, checker negative-oracle result, and controller queue/admission snapshots. Screenshots are not relevant to this headless service. Results apply only to the runner and settings recorded in the evidence; they do not establish a grader target or universal tail-latency claim.
 
 ## Cleanup

@@ -14,4 +14,11 @@ Run `python kv-server/scripts/benchmark.py --binary target/release/monoio-kv-ser
 
 ## Gotchas
 
+Use `campaign.py` and `load.go` for the longer scheduled-arrival sweep in
+`kv-server/BENCHMARK.md`. Its per-operation outcomes prevent an adaptive
+MGET rejection from making a reduced successful request mix look faster.
+Compare aggregate latency only for zero-loss cells. Resource samples include
+seed/warmup; filter by the client's recorded offering start/end for steady-state
+CPU deltas. All raw histograms, errors and owned-process cleanup survive the run.
+
 An adaptive request batch larger than the current active-connection cap receives status 2 without changing storage. Benchmark results depend on the runner and are not a universal SLO.
