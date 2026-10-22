@@ -150,7 +150,7 @@ def exercise(port):
         value, _, _ = rpc(sock, b"\x02" + field(b"roundtrip") + blob(b"value-check"))
         assert value == bytes([OK])
         value, _, _ = rpc(sock, b"\x01" + field(b"roundtrip"))
-        assert value == b"\x00\x00\x00\x0bvalue-check"
+        assert value == bytes([OK]) + blob(b"value-check")
         value, _, _ = rpc(sock, mget([b"x", b"y"]))
         assert decode_mget(value, [b"x", b"y"]) == {"x": "seed", "y": "seed"}
         value, _, _ = rpc(sock, b"\xff")
