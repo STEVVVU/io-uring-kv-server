@@ -4,6 +4,7 @@ members = [
     "monoio",
     "monoio-macros",
     "monoio-compat",
+    "kv-server",
 
     # Internal
     "examples",

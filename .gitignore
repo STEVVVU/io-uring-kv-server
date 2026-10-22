@@ -1,5 +1,6 @@
 /target
-Cargo.lock
+/reports/evidence/
+kv-server/scripts/__pycache__/
 coredump*
 *.profraw
 /lcov.info

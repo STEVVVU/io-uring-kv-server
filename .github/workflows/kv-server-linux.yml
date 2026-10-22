@@ -1,0 +1,76 @@
+name: KV service native io_uring
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'kv-server/**'
+      - '.agents/skills/verify/**'
+      - '.github/workflows/kv-server-linux.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'monoio/**'
+  push:
+    paths:
+      - 'kv-server/**'
+      - '.agents/skills/verify/**'
+      - '.github/workflows/kv-server-linux.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'monoio/**'
+
+permissions:
+  contents: read
+
+jobs:
+  native-uring:
+    # GitHub-hosted Linux VM; deliberately no container and no fallback driver.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust
+        run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy && rustup default 1.99.1
+      - name: Format and portable service tests
+        run: |
+          cargo fmt --all -- --check
+          cargo test --locked -p monoio-kv-server
+          cargo clippy --locked --no-deps -p monoio-kv-server --all-targets -- -D warnings
+      - name: Build native service
+        run: cargo build --locked --release -p monoio-kv-server
+      - name: Probe actual io_uring runtime
+        run: python3 kv-server/scripts/doctor.py --binary target/release/monoio-kv-server --evidence reports/evidence
+      - name: Drive real protocol and load controller
+        run: |
+          python3 kv-server/scripts/verify.py --binary target/release/monoio-kv-server --evidence reports/evidence
+          python3 kv-server/scripts/benchmark.py --binary target/release/monoio-kv-server --evidence reports/evidence
+      - name: Verify deliberate failure and owned-process cleanup
+        run: |
+          if python3 kv-server/scripts/verify.py --binary target/release/monoio-kv-server --evidence reports/evidence/failure --inject-failure-after-launch; then exit 1; fi
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          record = json.loads(Path('reports/evidence/failure/verification.json').read_text())
+          assert record['passed'] is False
+          assert record['failure']['message'] == 'intentional failure after launch'
+          assert record['owned_processes'] and record['cleanup']
+          assert all(owner['cleanup'] == 'reaped' for owner in record['owned_processes'])
+          for owner in record['owned_processes']:
+              try:
+                  os.kill(owner['pid'], 0)
+              except ProcessLookupError:
+                  continue
+              raise AssertionError(f"Owned process remains: {owner['pid']}")
+          print(json.dumps(record))
+          PY
+      - name: Preserve proof logs and raw latency samples
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: kv-server-native-uring-evidence
+          path: reports/evidence/
+          if-no-files-found: warn

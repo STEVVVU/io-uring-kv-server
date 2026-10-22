@@ -1,108 +1,43 @@
-# Monoio
-A thread-per-core Rust runtime with io_uring/epoll/kqueue.
+# io_uring key-value server
 
-[![Crates.io][crates-badge]][crates-url]
-[![MIT/Apache-2 licensed][license-badge]][license-url]
-[![Build Status][actions-badge]][actions-url]
-[![Codecov][codecov-badge]][codecov-url]
-[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fbytedance%2Fmonoio.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Fbytedance%2Fmonoio?ref=badge_shield)
-[中文说明][zh-readme-url]
+A bounded Rust TCP key-value service running on Monoio's native Linux io_uring driver. It implements atomic batched writes, snapshot reads, admission control, a concurrent-history checker and an offered-load benchmark.
 
-[crates-badge]: https://img.shields.io/crates/v/monoio.svg
-[crates-url]: https://crates.io/crates/monoio
-[license-badge]: https://img.shields.io/crates/l/monoio.svg
-[license-url]: LICENSE-MIT
-[actions-badge]: https://github.com/bytedance/monoio/actions/workflows/ci.yml/badge.svg
-[actions-url]: https://github.com/bytedance/monoio/actions
-[codecov-badge]: https://codecov.io/gh/bytedance/monoio/branch/master/graph/badge.svg?token=3MSAMJ6X3E
-[codecov-url]: https://codecov.io/gh/bytedance/monoio
-[zh-readme-url]: README-zh.md
+This repository preserves the complete [Monoio](https://github.com/bytedance/monoio) runtime and its history at `8675e9406ea7943c441d969e38c3f5fc198ef6d1`. The service and verification tooling are additions in [`kv-server/`](kv-server/). The [original README](README.upstream.md) and MIT/Apache-2.0 notices are retained.
 
-## Design Goal
-Monoio is a pure io_uring/epoll/kqueue Rust async runtime. Part of the design has been borrowed from Tokio and Tokio-uring. However, unlike Tokio-uring, Monoio does not run on top of another runtime, rendering it more efficient.
+## Run
 
-Moreover, Monoio is designed with a thread-per-core model in mind. Users do not need to worry about tasks being `Send` or `Sync`, as thread local storage can be used safely. In other words, the data does not escape the thread on await points, unlike on work-stealing runtimes such as Tokio. This is because for some use cases, specifically those targeted by this runtime, it is not necessary to make task schedulable between threads. For example, if we were to write a load balancer like NGINX, we would write it in a thread-per-core way. The thread local data does not need to be shared between threads, so the `Sync` and `Send` do not need to be implemented in the first place.
+Use Rust 1.99.1 and Python 3 on Linux with io_uring permitted by the kernel and process policy:
 
-As you may have guessed, this runtime is primarily targeted at servers, where operations are io-bound on network sockets, and therefore the use of native asynchronous I/O APIs maximizes the throughput of the server. In order for Monoio to be as efficient as possible, we've enabled some unstable Rust features, and we've designed a whole new IO abstraction, which unfortunately may cause some compatibility problems. [Our benchmarks](https://github.com/bytedance/monoio/blob/master/docs/en/benchmark.md) prove that, for our use-cases, Monoio has a better performance than other Rust runtimes.
-
-## Quick Start
-To use monoio, you need rust 1.75. If you already installed it, please make sure it is the latest version.
-
-Also, if you want to use io_uring, you must make sure your kernel supports it([5.6+](docs/en/platform-support.md)). And, memlock is [configured as a proper number](docs/en/memlock.md). If your kernel version does not meet the requirements, you can try to use the legacy driver to start, currently supports Linux and macOS([ref here](/docs/en/use-legacy-driver.md)).
-
-🚧Experimental windows support is on the way.
-
-Here is a basic example of how to use Monoio.
-
-```rust,no_run
-/// A echo example.
-///
-/// Run the example and `nc 127.0.0.1 50002` in another shell.
-/// All your input will be echoed out.
-use monoio::io::{AsyncReadRent, AsyncWriteRentExt};
-use monoio::net::{TcpListener, TcpStream};
-
-#[monoio::main]
-async fn main() {
-    let listener = TcpListener::bind("127.0.0.1:50002").unwrap();
-    println!("listening");
-    loop {
-        let incoming = listener.accept().await;
-        match incoming {
-            Ok((stream, addr)) => {
-                println!("accepted a connection from {}", addr);
-                monoio::spawn(echo(stream));
-            }
-            Err(e) => {
-                println!("accepted connection failed: {}", e);
-                return;
-            }
-        }
-    }
-}
-
-async fn echo(mut stream: TcpStream) -> std::io::Result<()> {
-    let mut buf: Vec<u8> = Vec::with_capacity(8 * 1024);
-    let mut res;
-    loop {
-        // read
-        (res, buf) = stream.read(buf).await;
-        if res? == 0 {
-            return Ok(());
-        }
-
-        // write all
-        (res, buf) = stream.write_all(buf).await;
-        res?;
-
-        // clear
-        buf.clear();
-    }
-}
+```sh
+cargo build --locked --release -p monoio-kv-server
+target/release/monoio-kv-server --bind 127.0.0.1:9000 --batch-mode adaptive
 ```
 
-You can find more example code in `examples` of this repository.
+The server accepts only numeric loopback addresses. It constructs `RuntimeBuilder<IoUringDriver>` directly and reports the actual driver on startup. It exits explicitly on unsupported hosts or denied io_uring setup. Storage is in memory and is lost when the process stops.
 
-## Limitations
-1. On Linux 5.6 or newer, Monoio can use uring or epoll as io driver. On lower versions of Linux, it can only run in epoll mode. On macOS, kqueue can be used. Other platforms are currently not supported.
-2. Monoio can not solve all problems. If the workload is very unbalanced, it may cause performance degradation than Tokio since CPU cores may not be fully utilized.
+## Design
 
-## Contributors
-<a href="https://github.com/bytedance/monoio/graphs/contributors"><img src="https://opencollective.com/monoio/contributors.svg?width=890&button=false" /></a>
+All storage operations execute on one local runtime thread. A request parses and validates its entire payload before admission, then changes or snapshots the map without an await. MPUT stages all changes before mutation; MGET observes one state. Separate connection tasks yield at network I/O.
 
-Thanks for their contributions!
+The binary protocol supports GET, PUT, MGET and MPUT. Frames are capped at 1 MiB, keys at 1 KiB, values at 16 KiB and batches at 32 items. Stored key/value bytes are limited to 64 MiB and 100,000 keys; concurrent connections are capped at 64. See the [protocol and controller details](kv-server/README.md).
 
-## Associated Projects
-- [local-sync](https://github.com/monoio-rs/local-sync): A thread local channel.
-- [monoio-tls](https://github.com/monoio-rs/monoio-tls): TLS wrapper for Monoio.
-- [monoio-codec](https://github.com/monoio-rs/monoio-codec): Codec utility for Monoio.
+Fixed mode uses configured connection and request-size limits. Adaptive mode adjusts connection admission after windows of accepted/rejected connections and bounds accepted batch size using active connection occupancy. This is a small admission policy inspired by [SEDA](https://www.sosp.org/2001/papers/welsh.pdf); it does not dynamically combine requests or reproduce SEDA's full staged architecture.
 
-HTTP framework and RPC framework are on the way.
+## Verify
 
-## Licenses
-Monoio is licensed under the MIT license or Apache license.
+```sh
+cargo fmt --all -- --check
+cargo test --locked -p monoio-kv-server
+cargo clippy --locked --no-deps -p monoio-kv-server --all-targets -- -D warnings
+python3 kv-server/scripts/doctor.py --binary target/release/monoio-kv-server --evidence reports/evidence
+python3 kv-server/scripts/verify.py --binary target/release/monoio-kv-server --evidence reports/evidence
+python3 kv-server/scripts/benchmark.py --binary target/release/monoio-kv-server --evidence reports/evidence
+```
 
-During developing we referenced a lot from Tokio, Mio, Tokio-uring and other related projects. We would like to thank the authors of these projects.
+The real-product driver checks exact GET/PUT values, atomic batched histories, fragmented network I/O, malformed requests, storage limits and connection-capacity recovery. It records owned process IDs, cleanup results and a durable failing verdict when an assertion fails. The [verification skill](.agents/skills/verify/SKILL.md) maps the lifecycle and negative control.
 
+The benchmark interleaves fixed/adaptive runs using the same seeded operation stream, bounded client queue and Poisson arrivals. It retains raw latency samples and reports offered, attempted, completed, rejected, timed-out and failed counts separately. Wire latency, client queue delay and offer-to-completion latency are separate measurements.
 
-[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fbytedance%2Fmonoio.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Fbytedance%2Fmonoio?ref=badge_large)
+Portable Rust checks have passed on Windows, including a Linux-target compile check. Native Linux behavior and load measurements are pending the first hosted run. No university grading SLO, multicore scaling, persistence or general latency advantage is claimed. This is an independently scoped service informed by the [Brown CSCI 1675 systems topic](https://cs.brown.edu/courses/csci1675/fall2025/hw/project-2.html), without course starter code or grader compatibility.
+
+The sole active GitHub workflow runs read-only native Linux checks and uploads evidence. Inherited runtime automation is preserved in [`.github/upstream-workflows/`](.github/upstream-workflows/).

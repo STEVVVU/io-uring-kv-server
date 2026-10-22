@@ -1,0 +1,16 @@
+[package]
+name = "monoio-kv-server"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[target.'cfg(target_os = "linux")'.dependencies]
+monoio = { path = "../monoio", default-features = false, features = ["iouring"] }
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "monoio-kv-server"
+path = "src/main.rs"
