@@ -459,7 +459,7 @@ dependencies = [
  "threadpool",
  "tokio",
  "tracing",
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
