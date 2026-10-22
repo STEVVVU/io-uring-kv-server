@@ -25,6 +25,8 @@ python kv-server/scripts/benchmark.py --binary target/release/monoio-kv-server -
 
 The benchmark interleaves two fixed and two adaptive runs using the same seeded offered-operation sequence. It drains all Poisson arrivals due on each scheduler tick, caps the pending client queue, and records offered, actually-started, completed, server/client rejected, timed-out and failed operations separately. It reports wire latency, client queue delay, and offer-to-completion latency independently, with raw samples, p50/p95/p99, throughput, concurrency, and controller logs. Client sockets are closed after worker shutdown. Do not interpret the results as a university grader target or as a general hardware SLO.
 
+The larger [186-trial native campaign](../docs/benchmarks/linux-39730624965/README.md) adds five alternating repeats at each size/rate/concurrency and a 120-second run per policy and size. At 48 clients, fixed completed every offer at the highest tested 50k/20k/8k offers/s for 64 B/1 KiB/16 KiB. Adaptive completed every offer in all five repeats at 10k/5k/8k respectively; higher small-value cells retained explicit server rejections. The [root README](../README.md#measured-results) gives tails and scope; the full matrix retains generator drops, sampled CPU/RSS, environment and raw hashes. No general adaptive speedup is established.
+
 The KV service is original code scoped to a public distributed-systems topic. It does not include or imitate course starter repositories, private handouts, graders, or published student solutions. Relevant topic and inspiration sources:
 
 - Brown CSCI 1675 Fall 2025 Project 2 topic: <https://cs.brown.edu/courses/csci1675/fall2025/hw/project-2.html>
