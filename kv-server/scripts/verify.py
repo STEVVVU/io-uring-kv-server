@@ -219,7 +219,23 @@ def capacity_check(binary, evidence, record, persist):
     record["owned_processes"].append(owner)
     try:
         persist()
-        with endpoint(socket.socket(), port) as first:
+        deadline = time.monotonic() + 10
+        while True:
+            if process.poll() is not None:
+                raise RuntimeError(f"capacity server exited before readiness: {process.returncode}")
+            candidate = socket.socket()
+            try:
+                first = endpoint(candidate, port)
+                break
+            except ConnectionRefusedError:
+                candidate.close()
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("capacity server did not begin listening")
+                time.sleep(0.005)
+            except BaseException:
+                candidate.close()
+                raise
+        with first:
             response, _, _ = rpc(first, mget([b"x"]))
             assert response[0] == OK, "first connection was not acknowledged"
             with endpoint(socket.socket(), port) as second:
