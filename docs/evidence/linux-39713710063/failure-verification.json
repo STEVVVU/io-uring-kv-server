@@ -1,0 +1,23 @@
+{
+  "driver": "io_uring",
+  "passed": false,
+  "proofs": {},
+  "owned_processes": [
+    {
+      "pid": 3314,
+      "mode": "fixed",
+      "log": "reports/evidence/failure/server-1-fixed.log",
+      "cleanup": "reaped"
+    }
+  ],
+  "cleanup": [
+    {
+      "pid": 3314,
+      "result": "reaped"
+    }
+  ],
+  "failure": {
+    "type": "AssertionError",
+    "message": "intentional failure after launch"
+  }
+}

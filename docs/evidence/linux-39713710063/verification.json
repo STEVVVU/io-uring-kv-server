@@ -1,0 +1,334 @@
+{
+  "driver": "io_uring",
+  "passed": true,
+  "proofs": {
+    "fixed": {
+      "concurrent_history": [
+        {
+          "kind": "mput",
+          "values": {
+            "x": "seed",
+            "y": "seed"
+          },
+          "start": 52225395641,
+          "end": 52265839049
+        },
+        {
+          "kind": "mget",
+          "keys": [
+            "x",
+            "y"
+          ],
+          "result": {
+            "x": "seed",
+            "y": "seed"
+          },
+          "start": 52267448947,
+          "end": 52267691438
+        },
+        {
+          "kind": "mput",
+          "values": {
+            "x": "b0",
+            "y": "b0"
+          },
+          "start": 52267513888,
+          "end": 52267827617
+        },
+        {
+          "kind": "mget",
+          "keys": [
+            "x",
+            "y"
+          ],
+          "result": {
+            "x": "b0",
+            "y": "b0"
+          },
+          "start": 52267705935,
+          "end": 52267929665
+        },
+        {
+          "kind": "mput",
+          "values": {
+            "x": "b1",
+            "y": "b1"
+          },
+          "start": 52267842044,
+          "end": 52268006862
+        },
+        {
+          "kind": "mget",
+          "keys": [
+            "x",
+            "y"
+          ],
+          "result": {
+            "x": "b0",
+            "y": "b0"
+          },
+          "start": 52267607363,
+          "end": 52268088882
+        },
+        {
+          "kind": "mput",
+          "values": {
+            "x": "b2",
+            "y": "b2"
+          },
+          "start": 52268051245,
+          "end": 52268296202
+        },
+        {
+          "kind": "mput",
+          "values": {
+            "x": "a0",
+            "y": "a0"
+          },
+          "start": 52267488008,
+          "end": 52268328989
+        },
+        {
+          "kind": "mget",
+          "keys": [
+            "x",
+            "y"
+          ],
+          "result": {
+            "x": "b2",
+            "y": "b2"
+          },
+          "start": 52268198346,
+          "end": 52268421723
+        },
+        {
+          "kind": "mput",
+          "values": {
+            "x": "a1",
+            "y": "a1"
+          },
+          "start": 52268343586,
+          "end": 52268485005
+        },
+        {
+          "kind": "mget",
+          "keys": [
+            "x",
+            "y"
+          ],
+          "result": {
+            "x": "a0",
+            "y": "a0"
+          },
+          "start": 52267944202,
+          "end": 52268531657
+        },
+        {
+          "kind": "mget",
+          "keys": [
+            "x",
+            "y"
+          ],
+          "result": {
+            "x": "a1",
+            "y": "a1"
+          },
+          "start": 52268440418,
+          "end": 52268561825
+        },
+        {
+          "kind": "mput",
+          "values": {
+            "x": "a2",
+            "y": "a2"
+          },
+          "start": 52268498119,
+          "end": 52268622421
+        }
+      ],
+      "fractured_snapshot_negative_oracle": "rejected",
+      "stalled_peer_payload_bytes": 18240
+    },
+    "adaptive": {
+      "concurrent_history": [
+        {
+          "kind": "mput",
+          "values": {
+            "x": "seed",
+            "y": "seed"
+          },
+          "start": 52326541811,
+          "end": 52366988204
+        },
+        {
+          "kind": "mget",
+          "keys": [
+            "x",
+            "y"
+          ],
+          "result": {
+            "x": "seed",
+            "y": "seed"
+          },
+          "start": 52368658663,
+          "end": 52368954228
+        },
+        {
+          "kind": "mput",
+          "values": {
+            "x": "b0",
+            "y": "b0"
+          },
+          "start": 52368782464,
+          "end": 52369074390
+        },
+        {
+          "kind": "mget",
+          "keys": [
+            "x",
+            "y"
+          ],
+          "result": {
+            "x": "b0",
+            "y": "b0"
+          },
+          "start": 52368965910,
+          "end": 52369182224
+        },
+        {
+          "kind": "mput",
+          "values": {
+            "x": "a0",
+            "y": "a0"
+          },
+          "start": 52369053584,
+          "end": 52369211165
+        },
+        {
+          "kind": "mget",
+          "keys": [
+            "x",
+            "y"
+          ],
+          "result": {
+            "x": "b1",
+            "y": "b1"
+          },
+          "start": 52369194146,
+          "end": 52369371935
+        },
+        {
+          "kind": "mget",
+          "keys": [
+            "x",
+            "y"
+          ],
+          "result": {
+            "x": "seed",
+            "y": "seed"
+          },
+          "start": 52368692294,
+          "end": 52369448797
+        },
+        {
+          "kind": "mput",
+          "values": {
+            "x": "a1",
+            "y": "a1"
+          },
+          "start": 52369225352,
+          "end": 52369476571
+        },
+        {
+          "kind": "mget",
+          "keys": [
+            "x",
+            "y"
+          ],
+          "result": {
+            "x": "a1",
+            "y": "a1"
+          },
+          "start": 52369460739,
+          "end": 52369576285
+        },
+        {
+          "kind": "mput",
+          "values": {
+            "x": "b1",
+            "y": "b1"
+          },
+          "start": 52369087174,
+          "end": 52369604850
+        },
+        {
+          "kind": "mput",
+          "values": {
+            "x": "b2",
+            "y": "b2"
+          },
+          "start": 52369615831,
+          "end": 52369786360
+        },
+        {
+          "kind": "mget",
+          "keys": [
+            "x",
+            "y"
+          ],
+          "result": {
+            "x": "a2",
+            "y": "a2"
+          },
+          "start": 52369588177,
+          "end": 52369807166
+        },
+        {
+          "kind": "mput",
+          "values": {
+            "x": "a2",
+            "y": "a2"
+          },
+          "start": 52369487802,
+          "end": 52369851140
+        }
+      ],
+      "fractured_snapshot_negative_oracle": "rejected",
+      "stalled_peer_payload_bytes": 18240
+    }
+  },
+  "owned_processes": [
+    {
+      "pid": 3102,
+      "mode": "fixed",
+      "log": "reports/evidence/server-1-fixed.log",
+      "cleanup": "reaped"
+    },
+    {
+      "pid": 3107,
+      "mode": "adaptive",
+      "log": "reports/evidence/server-2-adaptive.log",
+      "cleanup": "reaped"
+    },
+    {
+      "pid": 3112,
+      "mode": "capacity",
+      "log": "reports/evidence/capacity-server.log",
+      "cleanup": "reaped"
+    }
+  ],
+  "cleanup": [
+    {
+      "pid": 3102,
+      "result": "reaped"
+    },
+    {
+      "pid": 3107,
+      "result": "reaped"
+    },
+    {
+      "pid": 3112,
+      "result": "reaped"
+    }
+  ]
+}

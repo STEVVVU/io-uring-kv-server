@@ -1,0 +1,179 @@
+{
+  "runs": [
+    {
+      "run": 1,
+      "mode": "fixed",
+      "offer_window_seconds": 3.0,
+      "schedule_offers": 3624,
+      "offered": 3624,
+      "enqueued": 3624,
+      "attempted": 3624,
+      "completed": 3624,
+      "completed_during_offer_window": 3622,
+      "server_rejected": 0,
+      "client_queue_rejected": 0,
+      "timeouts": 0,
+      "errors": 0,
+      "concurrency": 48,
+      "offered_rate_per_second": 1200.0,
+      "seed": 20261021,
+      "elapsed_including_drain_seconds": 3.000430773,
+      "completion_drain_seconds": 0.000430773,
+      "offered_rate_observed_per_second": 1208.0,
+      "completion_throughput_including_drain_per_second": 1207.8265669754214,
+      "wire_latency_ms": {
+        "p50": 0.102047,
+        "p95": 0.259598,
+        "p99": 0.40252
+      },
+      "scheduler_lag_ms": {
+        "p50": 0.565056,
+        "p95": 1.040478,
+        "p99": 1.089273
+      },
+      "queue_delay_ms": {
+        "p50": 0.054652,
+        "p95": 0.112537,
+        "p99": 0.183052
+      },
+      "offer_to_completion_latency_ms": {
+        "p50": 0.752179,
+        "p95": 1.229588,
+        "p99": 1.349086
+      },
+      "controller_log": "reports/evidence/server-1-fixed.log"
+    },
+    {
+      "run": 2,
+      "mode": "adaptive",
+      "offer_window_seconds": 3.0,
+      "schedule_offers": 3624,
+      "offered": 3624,
+      "enqueued": 3624,
+      "attempted": 3624,
+      "completed": 2894,
+      "completed_during_offer_window": 2891,
+      "server_rejected": 730,
+      "client_queue_rejected": 0,
+      "timeouts": 0,
+      "errors": 0,
+      "concurrency": 48,
+      "offered_rate_per_second": 1200.0,
+      "seed": 20261021,
+      "elapsed_including_drain_seconds": 3.000244073,
+      "completion_drain_seconds": 0.000244073,
+      "offered_rate_observed_per_second": 1208.0,
+      "completion_throughput_including_drain_per_second": 964.5881900222322,
+      "wire_latency_ms": {
+        "p50": 0.101739,
+        "p95": 0.279972,
+        "p99": 0.41808
+      },
+      "scheduler_lag_ms": {
+        "p50": 0.554876,
+        "p95": 1.043749,
+        "p99": 1.087322
+      },
+      "queue_delay_ms": {
+        "p50": 0.053169,
+        "p95": 0.112132,
+        "p99": 0.188071
+      },
+      "offer_to_completion_latency_ms": {
+        "p50": 0.743134,
+        "p95": 1.241376,
+        "p99": 1.395861
+      },
+      "controller_log": "reports/evidence/server-2-adaptive.log"
+    },
+    {
+      "run": 3,
+      "mode": "adaptive",
+      "offer_window_seconds": 3.0,
+      "schedule_offers": 3624,
+      "offered": 3624,
+      "enqueued": 3624,
+      "attempted": 3624,
+      "completed": 2894,
+      "completed_during_offer_window": 2892,
+      "server_rejected": 730,
+      "client_queue_rejected": 0,
+      "timeouts": 0,
+      "errors": 0,
+      "concurrency": 48,
+      "offered_rate_per_second": 1200.0,
+      "seed": 20261021,
+      "elapsed_including_drain_seconds": 3.000369315,
+      "completion_drain_seconds": 0.000369315,
+      "offered_rate_observed_per_second": 1208.0,
+      "completion_throughput_including_drain_per_second": 964.5479259942372,
+      "wire_latency_ms": {
+        "p50": 0.101349,
+        "p95": 0.263291,
+        "p99": 0.40236
+      },
+      "scheduler_lag_ms": {
+        "p50": 0.548981,
+        "p95": 1.043469,
+        "p99": 1.092597
+      },
+      "queue_delay_ms": {
+        "p50": 0.053933,
+        "p95": 0.11263,
+        "p99": 0.180264
+      },
+      "offer_to_completion_latency_ms": {
+        "p50": 0.738811,
+        "p95": 1.230224,
+        "p99": 1.359531
+      },
+      "controller_log": "reports/evidence/server-3-adaptive.log"
+    },
+    {
+      "run": 4,
+      "mode": "fixed",
+      "offer_window_seconds": 3.0,
+      "schedule_offers": 3624,
+      "offered": 3624,
+      "enqueued": 3624,
+      "attempted": 3624,
+      "completed": 3624,
+      "completed_during_offer_window": 3622,
+      "server_rejected": 0,
+      "client_queue_rejected": 0,
+      "timeouts": 0,
+      "errors": 0,
+      "concurrency": 48,
+      "offered_rate_per_second": 1200.0,
+      "seed": 20261021,
+      "elapsed_including_drain_seconds": 3.000298435,
+      "completion_drain_seconds": 0.000298435,
+      "offered_rate_observed_per_second": 1208.0,
+      "completion_throughput_including_drain_per_second": 1207.8798421264385,
+      "wire_latency_ms": {
+        "p50": 0.10178,
+        "p95": 0.271751,
+        "p99": 0.452613
+      },
+      "scheduler_lag_ms": {
+        "p50": 0.574308,
+        "p95": 1.048467,
+        "p99": 1.09271
+      },
+      "queue_delay_ms": {
+        "p50": 0.052455,
+        "p95": 0.117189,
+        "p99": 0.227709
+      },
+      "offer_to_completion_latency_ms": {
+        "p50": 0.764152,
+        "p95": 1.236706,
+        "p99": 1.448483
+      },
+      "controller_log": "reports/evidence/server-4-fixed.log"
+    }
+  ],
+  "raw_artifact_sha256": "608a9509b59a5e47141cbd6a744d1992bbceb6b137c1dcfb57e76716d75de1c7",
+  "source_run": "https://github.com/STEVVVU/io-uring-kv-server/actions/runs/39713710063",
+  "verified_product_commit": "7f1cf5dc57a61fd21e330f133b5178752c713939"
+}

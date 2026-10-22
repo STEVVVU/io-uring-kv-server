@@ -5,7 +5,7 @@ description: Drive the Monoio KV service over its real Linux TCP/io_uring interf
 
 # Verify Monoio KV service
 
-Draft: the driver, doctor, and cleanup commands are prepared, but end-to-end proof is pending the native Linux workflow because this Windows host cannot run io_uring.
+Proved on native hosted Ubuntu in run 39713710063 at product commit 7f1cf5dc57a61fd21e330f133b5178752c713939: Launch, Doctor, Drive, retained Evidence and Cleanup passed. The injected post-launch assertion failed as intended while preserving passed=false and a reaped owned process. Curated proof is in docs/evidence/linux-39713710063; raw samples remain in the workflow artifact. Windows itself cannot run io_uring.
 
 ## Launch
 
