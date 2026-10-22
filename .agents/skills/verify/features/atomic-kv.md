@@ -14,4 +14,4 @@ Run `python kv-server/scripts/verify.py --binary target/release/monoio-kv-server
 
 ## Gotchas
 
-The server owns the map on one local execution thread. MGET/MPUT batches may be rejected by the adaptive active-connection cap before storage access.
+The server owns the map on one local execution thread. MGET/MPUT batches may be rejected by the adaptive pending-response cap before storage access.

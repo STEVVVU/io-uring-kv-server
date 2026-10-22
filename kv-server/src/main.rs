@@ -104,16 +104,16 @@ struct Admission {
 
 #[cfg(target_os = "linux")]
 impl Admission {
-    fn batch_limit(&self, active: usize) -> usize {
+    fn batch_limit(&self, pending_responses: usize) -> usize {
         match self.mode {
             BatchMode::Fixed => self.batch_limit,
             BatchMode::Adaptive => {
-                monoio_kv_server::adaptive_batch_limit(active, self.connection_limit)
+                monoio_kv_server::adaptive_batch_limit(pending_responses, self.connection_limit)
             }
         }
     }
 
-    fn sample(&mut self, rejected: bool, queue: usize) {
+    fn sample(&mut self, rejected: bool, connections: usize, pending_responses: usize) {
         self.attempts += 1;
         self.rejected += usize::from(rejected);
         if self.attempts == 32 {
@@ -125,11 +125,12 @@ impl Admission {
                 );
             }
             println!(
-                "ADMISSION mode={} queue_snapshot={} limit={} batch_limit={} sampled_attempts={} sampled_rejected={}",
+                "ADMISSION mode={} connection_snapshot={} pending_responses={} limit={} batch_limit={} sampled_attempts={} sampled_rejected={}",
                 if matches!(self.mode, BatchMode::Adaptive) { "adaptive" } else { "fixed" },
-                queue,
+                connections,
+                pending_responses,
                 self.connection_limit,
-                self.batch_limit(queue),
+                self.batch_limit(pending_responses),
                 self.attempts,
                 self.rejected
             );
@@ -152,6 +153,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 
     let listener = TcpListener::bind(config.address)?;
     let active = Rc::new(Cell::new(0usize));
+    let pending_responses = Rc::new(Cell::new(0usize));
     let store = Rc::new(RefCell::new(Store::default()));
     let admission = Rc::new(RefCell::new(Admission {
         mode: config.batch_mode,
@@ -169,7 +171,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
         let count = active.get();
         let mut admission_state = admission.borrow_mut();
         let rejected = count >= admission_state.connection_limit;
-        admission_state.sample(rejected, count);
+        admission_state.sample(rejected, count, pending_responses.get());
         if rejected {
             drop(stream);
             eprintln!(
@@ -181,12 +183,50 @@ async fn serve(config: Config) -> std::io::Result<()> {
         drop(admission_state);
         active.set(count + 1);
         let active = Rc::clone(&active);
+        let pending_responses = Rc::clone(&pending_responses);
         let store = Rc::clone(&store);
         let admission = Rc::clone(&admission);
         spawn(async move {
-            let _ = connection(stream, store, active.clone(), admission).await;
+            let _ = connection(stream, store, pending_responses, admission).await;
             active.set(active.get() - 1);
         });
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct PendingResponse(std::rc::Rc<std::cell::Cell<usize>>);
+
+#[cfg(target_os = "linux")]
+impl PendingResponse {
+    fn begin(count: &std::rc::Rc<std::cell::Cell<usize>>) -> Self {
+        count.set(count.get() + 1);
+        Self(std::rc::Rc::clone(count))
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for PendingResponse {
+    fn drop(&mut self) {
+        self.0.set(self.0.get() - 1);
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    #[test]
+    fn pending_response_count_is_released_on_early_return() {
+        use std::{cell::Cell, rc::Rc};
+        let count = Rc::new(Cell::new(0));
+        let outer = super::PendingResponse::begin(&count);
+        let action = || -> Result<(), ()> {
+            let _inner = super::PendingResponse::begin(&count);
+            assert_eq!(count.get(), 2);
+            Err(())
+        };
+        assert!(action().is_err());
+        assert_eq!(count.get(), 1);
+        drop(outer);
+        assert_eq!(count.get(), 0);
     }
 }
 
@@ -194,7 +234,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 async fn connection(
     mut stream: monoio::net::TcpStream,
     store: std::rc::Rc<std::cell::RefCell<monoio_kv_server::Store>>,
-    active: std::rc::Rc<std::cell::Cell<usize>>,
+    pending_responses: std::rc::Rc<std::cell::Cell<usize>>,
     admission: std::rc::Rc<std::cell::RefCell<Admission>>,
 ) -> std::io::Result<()> {
     use monoio::io::{AsyncReadRentExt, AsyncWriteRentExt};
@@ -217,9 +257,11 @@ async fn connection(
         if read.is_err() {
             return Ok(());
         }
+        // Idle connections are admission occupancy, not queued response work.
+        let _pending = PendingResponse::begin(&pending_responses);
         let batch_limit = {
             let admission = admission.borrow();
-            admission.batch_limit(active.get())
+            admission.batch_limit(pending_responses.get())
         };
         let response = match store.borrow_mut().execute(&request, batch_limit) {
             Ok(response) => response,

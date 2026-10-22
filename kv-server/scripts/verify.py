@@ -289,6 +289,22 @@ def bind_rejection_check(binary):
     assert "loopback" in result.stderr, f"unexpected bind rejection: {result.stderr!r}"
 
 
+def idle_peer_batch_check(port):
+    """Idle keep-alive peers must not masquerade as queued response work."""
+    values = {f"idle-{i}".encode(): f"value-{i}".encode() for i in range(16)}
+    with endpoint(socket.socket(), port) as seed:
+        assert rpc(seed, mput(values))[0] == bytes([OK])
+    with contextlib.ExitStack() as peers:
+        sockets = []
+        for _ in range(48):
+            sock = peers.enter_context(endpoint(socket.socket(), port))
+            assert decode_mget(rpc(sock, mget([b"idle-0"]))[0], [b"idle-0"])["idle-0"] == values[b"idle-0"].decode()
+            sockets.append(sock)
+        response = rpc(sockets[0], mget(list(values)))[0]
+        assert decode_mget(response, list(values)) == {k.decode(): v.decode() for k, v in values.items()}
+    return {"idle_persistent_peers": 48, "mget_items": 16, "exact_values": True}
+
+
 def start_server(binary, evidence, mode, batch, run):
     port = free_port()
     log_path = evidence / f"server-{run}-{mode}.log"
@@ -358,6 +374,7 @@ def main():
                 if args.inject_failure_after_launch:
                     raise AssertionError("intentional failure after launch")
                 record["proofs"][mode] = exercise(port)
+                record["proofs"][mode]["idle_peer_batch"] = idle_peer_batch_check(port)
             finally:
                 try:
                     stop_server(process, log)
