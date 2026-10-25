@@ -11,6 +11,296 @@
 
 ## Architecture and execution guide
 
+<!-- execution-flow:start -->
+### Execution flow
+
+Start with the primary path, then expand a detailed workflow. Select a numbered node to see its operation, implementation techniques, and source. Solid arrows show the named control, data, or lifecycle handoff; dotted arrows show error paths. Separate entry points are named in each workflow.
+
+<a id="review-walkthrough"></a>
+
+#### Walk through one concrete example
+
+A client connects to the configured loopback server and sends one length-prefixed request that reads two keys from the store.
+
+**Trace.** [Bind listener and create local shared state](#flow-step-listener-state) → [Accept and admit or reject a connection](#flow-step-accept-admit) → [Read persistent length-prefixed request frames](#flow-step-persistent-read-frame) → [Account pending response and select batch bound](#flow-step-account-batch-limit) → [Parse operation and validate the complete payload](#flow-step-parse-validate) → [Read, write, or snapshot multi-key values](#flow-step-store-dispatch) → [Map store errors to protocol statuses](#flow-step-map-errors) → [Frame and write the response completely](#flow-step-write-response).
+
+**Result and boundary.** The server validates the complete request, dispatches the multi-key read, and writes a framed response before reading the next frame on the persistent connection. Admission is bounded; when at its socket limit, an accepted socket is dropped without decrementing active occupancy, then the accept loop continues.
+
+<details>
+<summary>Implementation decisions to explain</summary>
+
+**Why validate the complete payload before calling the store?** Parsing and validation establish the operation and all operands before dispatch, avoiding partial effects from malformed requests. This delays store work until the full frame is checked.
+
+[Bounded full-input validation](#technique-full-validation).
+
+**Why keep the connection open after a response?** The protocol reads another length-prefixed frame from the same connection, avoiding a reconnect per request. The client must still respect framing and connection lifecycle.
+
+[Persistent connection request lifecycle](#technique-persistent-connection).
+
+</details>
+
+#### Primary execution flow
+
+Linux CLI startup selects the literal loopback socket and native io_uring runtime, then serve admits connections into a single-owner local state machine. Each persistent connection reads framed requests, validates and executes them, maps errors, writes framed responses, and releases occupancy; the history oracle is an independent verification workflow.
+
+```mermaid
+flowchart TD
+    n1["1. Validate CLI and literal<br/>loopback bind"]
+    click n1 href "https://github.com/STEVVVU/io-uring-kv-server#flow-step-cli-config" "Open step, techniques, and source" _top
+    n2["2. Build and run the io_uring<br/>runtime"]
+    click n2 href "https://github.com/STEVVVU/io-uring-kv-server#flow-step-native-runtime" "Open step, techniques, and source" _top
+    n3["3. Bind listener and create<br/>local shared state"]
+    click n3 href "https://github.com/STEVVVU/io-uring-kv-server#flow-step-listener-state" "Open step, techniques, and source" _top
+    n4["4. Accept and admit or reject a<br/>connection"]
+    click n4 href "https://github.com/STEVVVU/io-uring-kv-server#flow-step-accept-admit" "Open step, techniques, and source" _top
+    n5["5. Read persistent<br/>length-prefixed request frames"]
+    click n5 href "https://github.com/STEVVVU/io-uring-kv-server#flow-step-persistent-read-frame" "Open step, techniques, and source" _top
+    n6["6. Account pending response and<br/>select batch bound"]
+    click n6 href "https://github.com/STEVVVU/io-uring-kv-server#flow-step-account-batch-limit" "Open step, techniques, and source" _top
+    n7["7. Parse operation and validate<br/>the complete payload"]
+    click n7 href "https://github.com/STEVVVU/io-uring-kv-server#flow-step-parse-validate" "Open step, techniques, and source" _top
+    n8["8. Read, write, or snapshot<br/>multi-key values"]
+    click n8 href "https://github.com/STEVVVU/io-uring-kv-server#flow-step-store-dispatch" "Open step, techniques, and source" _top
+    n9["9. Map store errors to protocol<br/>statuses"]
+    click n9 href "https://github.com/STEVVVU/io-uring-kv-server#flow-step-map-errors" "Open step, techniques, and source" _top
+    n10["10. Frame and write the response<br/>completely"]
+    click n10 href "https://github.com/STEVVVU/io-uring-kv-server#flow-step-write-response" "Open step, techniques, and source" _top
+    n11["11. Release active connection<br/>occupancy"]
+    click n11 href "https://github.com/STEVVVU/io-uring-kv-server#flow-step-release-connection" "Open step, techniques, and source" _top
+    n1 -->|"valid config passed to run"| n2
+    n2 -->|"runtime block_on drives serve"| n3
+    n3 -->|"listener enters accept loop"| n4
+    n4 -->|"accepted below limit; spawn connection"| n5
+    n4 -->|"connection task returns"| n11
+    n5 -->|"complete valid-size payload read"| n6
+    n5 -.->|"read failure ends connection"| n11
+    n5 -.->|"zero or oversized frame length errors"| n11
+    n6 -->|"request and selected batch bound"| n7
+    n7 -->|"valid complete operation"| n8
+    n7 -.->|"malformed or too-large input"| n9
+    n8 -->|"overload result or successful response"| n9
+    n9 -->|"protocol response bytes"| n10
+    n10 -->|"full write succeeds; next request on<br/>same stream"| n5
+    n10 -.->|"write error returns from connection"| n11
+    n4 -->|"at limit: drop socket and accept next;<br/>no active increment"| n4
+```
+
+**Detailed workflows.** [Native server request lifecycle](#flow-workflow-server-request-lifecycle) · [Concurrent history oracle](#flow-workflow-history-oracle).
+
+<a id="flow-workflow-server-request-lifecycle"></a>
+
+<details>
+<summary>Native server request lifecycle</summary>
+
+Starts from Linux CLI parsing and follows the real io_uring service through admission, request parsing, store operations, response framing, and task cleanup. Rejected sockets are dropped in serve without spawning a connection task; malformed frames and read/write failures terminate their connection.
+
+```mermaid
+flowchart TD
+    n1["1. Validate CLI and literal<br/>loopback bind"]
+    click n1 href "https://github.com/STEVVVU/io-uring-kv-server#flow-step-cli-config" "Open step, techniques, and source" _top
+    n2["2. Build and run the io_uring<br/>runtime"]
+    click n2 href "https://github.com/STEVVVU/io-uring-kv-server#flow-step-native-runtime" "Open step, techniques, and source" _top
+    n3["3. Bind listener and create<br/>local shared state"]
+    click n3 href "https://github.com/STEVVVU/io-uring-kv-server#flow-step-listener-state" "Open step, techniques, and source" _top
+    n4["4. Accept and admit or reject a<br/>connection"]
+    click n4 href "https://github.com/STEVVVU/io-uring-kv-server#flow-step-accept-admit" "Open step, techniques, and source" _top
+    n5["5. Read persistent<br/>length-prefixed request frames"]
+    click n5 href "https://github.com/STEVVVU/io-uring-kv-server#flow-step-persistent-read-frame" "Open step, techniques, and source" _top
+    n6["6. Account pending response and<br/>select batch bound"]
+    click n6 href "https://github.com/STEVVVU/io-uring-kv-server#flow-step-account-batch-limit" "Open step, techniques, and source" _top
+    n7["7. Parse operation and validate<br/>the complete payload"]
+    click n7 href "https://github.com/STEVVVU/io-uring-kv-server#flow-step-parse-validate" "Open step, techniques, and source" _top
+    n8["8. Read, write, or snapshot<br/>multi-key values"]
+    click n8 href "https://github.com/STEVVVU/io-uring-kv-server#flow-step-store-dispatch" "Open step, techniques, and source" _top
+    n9["9. Map store errors to protocol<br/>statuses"]
+    click n9 href "https://github.com/STEVVVU/io-uring-kv-server#flow-step-map-errors" "Open step, techniques, and source" _top
+    n10["10. Frame and write the response<br/>completely"]
+    click n10 href "https://github.com/STEVVVU/io-uring-kv-server#flow-step-write-response" "Open step, techniques, and source" _top
+    n11["11. Release active connection<br/>occupancy"]
+    click n11 href "https://github.com/STEVVVU/io-uring-kv-server#flow-step-release-connection" "Open step, techniques, and source" _top
+    n1 -->|"valid config passed to run"| n2
+    n2 -->|"runtime block_on drives serve"| n3
+    n3 -->|"listener enters accept loop"| n4
+    n4 -->|"accepted below limit; spawn connection"| n5
+    n4 -->|"connection task returns"| n11
+    n5 -->|"complete valid-size payload read"| n6
+    n5 -.->|"read failure ends connection"| n11
+    n5 -.->|"zero or oversized frame length errors"| n11
+    n6 -->|"request and selected batch bound"| n7
+    n7 -->|"valid complete operation"| n8
+    n7 -.->|"malformed or too-large input"| n9
+    n8 -->|"overload result or successful response"| n9
+    n9 -->|"protocol response bytes"| n10
+    n10 -->|"full write succeeds; next request on<br/>same stream"| n5
+    n10 -.->|"write error returns from connection"| n11
+    n4 -->|"at limit: drop socket and accept next;<br/>no active increment"| n4
+```
+
+</details>
+
+<a id="flow-workflow-history-oracle"></a>
+
+<details>
+<summary>Concurrent history oracle</summary>
+
+Independent verification-only path: verify.py gathers operation intervals and observed results from real TCP sessions, then linearizable checks whether some sequential order respects real-time precedence and the MPUT/MGET map specification. The checker self-test includes a fractured snapshot that must be rejected; it does not run in the service request path.
+
+```mermaid
+flowchart TD
+    n12["12. Check concurrent history<br/>against a sequential oracle"]
+    click n12 href "https://github.com/STEVVVU/io-uring-kv-server#flow-step-verification-history" "Open step, techniques, and source" _top
+```
+
+</details>
+
+#### Steps, techniques, and source
+
+These source traces cover the active scope below. They explain implementation behavior; benchmark results and their limits remain in the measurement sections.
+
+<a id="flow-step-cli-config"></a>
+
+##### 1. Validate CLI and literal loopback bind
+
+**Component.** kv-server::Config::from_args. Parses bind, connection, and batch options; bind values must parse as numeric socket addresses on a loopback interface. Invalid, missing, unknown, or out-of-range options return errors.
+
+**Techniques at this step.** [Literal loopback binding](#technique-loopback).
+
+**Source.** [`kv-server/src/main.rs:43`](https://github.com/STEVVVU/io-uring-kv-server/blob/master/kv-server/src/main.rs#L43) · [`kv-server/src/lib.rs:15`](https://github.com/STEVVVU/io-uring-kv-server/blob/master/kv-server/src/lib.rs#L15). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-native-runtime"></a>
+
+##### 2. Build and run the io_uring runtime
+
+**Component.** kv-server::run / monoio::Runtime::block_on. The Linux entrypoint constructs RuntimeBuilder<IoUringDriver> and drives serve. The runtime polls its future and local task queue, submits when tasks remain, then parks to process completion events; startup errors reach main and exit nonzero.
+
+**Techniques at this step.** [Completion-based asynchronous I/O](#technique-completion-io).
+
+**Source.** [`kv-server/src/main.rs:16`](https://github.com/STEVVVU/io-uring-kv-server/blob/master/kv-server/src/main.rs#L16) · [`monoio/src/runtime.rs:131`](https://github.com/STEVVVU/io-uring-kv-server/blob/master/monoio/src/runtime.rs#L131) · [`monoio/src/driver/uring/mod.rs:358`](https://github.com/STEVVVU/io-uring-kv-server/blob/master/monoio/src/driver/uring/mod.rs#L358). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-listener-state"></a>
+
+##### 3. Bind listener and create local shared state
+
+**Component.** kv-server::serve. Binds the configured listener and initializes local active-count, pending-response-count, Store, and Admission state using Rc/Cell/RefCell. It prints and flushes READY only after setup succeeds.
+
+**Techniques at this step.** [Single-owner asynchronous execution](#technique-single-owner) · [Bounded connections and pending-response accounting](#technique-bounded-admission).
+
+**Source.** [`kv-server/src/main.rs:145`](https://github.com/STEVVVU/io-uring-kv-server/blob/master/kv-server/src/main.rs#L145). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-accept-admit"></a>
+
+##### 4. Accept and admit or reject a connection
+
+**Component.** kv-server::serve. Each accepted socket is compared with the current connection limit and contributes to a 32-attempt sample. At or above the limit it drops the socket; otherwise it increments active count and spawns a connection task sharing the same local store and counters.
+
+**Techniques at this step.** [Bounded connections and pending-response accounting](#technique-bounded-admission) · [Windowed adaptive limits with hysteresis](#technique-adaptive-limits) · [Persistent connection request lifecycle](#technique-persistent-connection) · [Single-owner asynchronous execution](#technique-single-owner).
+
+**Source.** [`kv-server/src/main.rs:169`](https://github.com/STEVVVU/io-uring-kv-server/blob/master/kv-server/src/main.rs#L169). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-persistent-read-frame"></a>
+
+##### 5. Read persistent length-prefixed request frames
+
+**Component.** kv-server::connection / AsyncReadRentExt::read_exact. A connection loops reading a four-byte big-endian length and then exactly that many request bytes. Header or payload read errors end the connection cleanly; zero or over-limit lengths return InvalidData. read_exact repeats reads until filled, EOF, or another error.
+
+**Techniques at this step.** [Length-prefixed TCP framing](#technique-length-framing) · [Persistent connection request lifecycle](#technique-persistent-connection) · [Completion-based asynchronous I/O](#technique-completion-io).
+
+**Source.** [`kv-server/src/main.rs:244`](https://github.com/STEVVVU/io-uring-kv-server/blob/master/kv-server/src/main.rs#L244) · [`monoio/src/io/async_read_rent_ext.rs:84`](https://github.com/STEVVVU/io-uring-kv-server/blob/master/monoio/src/io/async_read_rent_ext.rs#L84). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-account-batch-limit"></a>
+
+##### 6. Account pending response and select batch bound
+
+**Component.** kv-server::PendingResponse / Admission::batch_limit. Once a full frame arrives, an RAII guard increments pending response work. The current fixed or queue-derived adaptive batch limit is read from Admission and passed to Store::execute; dropping the guard decrements the count on all exits.
+
+**Techniques at this step.** [Bounded connections and pending-response accounting](#technique-bounded-admission) · [Windowed adaptive limits with hysteresis](#technique-adaptive-limits).
+
+**Source.** [`kv-server/src/main.rs:201`](https://github.com/STEVVVU/io-uring-kv-server/blob/master/kv-server/src/main.rs#L201) · [`kv-server/src/main.rs:208`](https://github.com/STEVVVU/io-uring-kv-server/blob/master/kv-server/src/main.rs#L208) · [`kv-server/src/main.rs:107`](https://github.com/STEVVVU/io-uring-kv-server/blob/master/kv-server/src/main.rs#L107). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-parse-validate"></a>
+
+##### 7. Parse operation and validate the complete payload
+
+**Component.** kv-server::Store::execute / Cursor. The cursor bounds every read with checked offsets, validates key/value lengths and batch count, and requires finish() to consume the entire request. MGET and MPUT parse all keys or entries and finish validation before producing results or mutating state; malformed and oversized fields return distinct errors.
+
+**Techniques at this step.** [Bounded full-input validation](#technique-full-validation).
+
+**Source.** [`kv-server/src/lib.rs:55`](https://github.com/STEVVVU/io-uring-kv-server/blob/master/kv-server/src/lib.rs#L55) · [`kv-server/src/lib.rs:170`](https://github.com/STEVVVU/io-uring-kv-server/blob/master/kv-server/src/lib.rs#L170) · [`kv-server/src/lib.rs:208`](https://github.com/STEVVVU/io-uring-kv-server/blob/master/kv-server/src/lib.rs#L208). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-store-dispatch"></a>
+
+##### 8. Read, write, or snapshot multi-key values
+
+**Component.** kv-server::Store::execute. GET returns one encoded value or the missing sentinel; PUT validates capacity before inserting. MGET validates admission then builds its response by reading each requested key while the single local Store borrow is held. MPUT validates admission, stages entries, accounts for replaced and added bytes/entries, rejects capacity overflow, then applies the staged map and updates byte accounting.
+
+**Techniques at this step.** [Single-owner asynchronous execution](#technique-single-owner) · [Staged atomic MPUT with byte accounting](#technique-staged-mput) · [Snapshot MGET response construction](#technique-snapshot-mget).
+
+**Source.** [`kv-server/src/lib.rs:54`](https://github.com/STEVVVU/io-uring-kv-server/blob/master/kv-server/src/lib.rs#L54) · [`kv-server/src/lib.rs:150`](https://github.com/STEVVVU/io-uring-kv-server/blob/master/kv-server/src/lib.rs#L150). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-map-errors"></a>
+
+##### 9. Map store errors to protocol statuses
+
+**Component.** kv-server::connection. Overloaded requests become the OVERLOADED response byte; malformed and too-large requests become BAD_REQUEST. Successful store operations retain their encoded response. Invalid frame lengths instead return an I/O error and terminate this connection path.
+
+This is protocol status mapping and error propagation, not a distinct technique in the ledger.
+
+**Source.** [`kv-server/src/main.rs:266`](https://github.com/STEVVVU/io-uring-kv-server/blob/master/kv-server/src/main.rs#L266). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-write-response"></a>
+
+##### 10. Frame and write the response completely
+
+**Component.** kv-server::connection / AsyncWriteRentExt::write_all. Prefixes response bytes with a big-endian 32-bit length and calls write_all. The extension loops over partial writes, retries Interrupted, and returns WriteZero or other write errors; a write error exits the connection and releases its pending guard.
+
+**Techniques at this step.** [Completion-based asynchronous I/O](#technique-completion-io) · [Length-prefixed TCP framing](#technique-length-framing).
+
+**Source.** [`kv-server/src/main.rs:276`](https://github.com/STEVVVU/io-uring-kv-server/blob/master/kv-server/src/main.rs#L276) · [`monoio/src/io/async_write_rent_ext.rs:30`](https://github.com/STEVVVU/io-uring-kv-server/blob/master/monoio/src/io/async_write_rent_ext.rs#L30). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-release-connection"></a>
+
+##### 11. Release active connection occupancy
+
+**Component.** kv-server::serve spawned task. When connection returns, regardless of its result, the spawned task decrements active occupancy. This permits later accepts to use the released capacity.
+
+**Techniques at this step.** [Bounded connections and pending-response accounting](#technique-bounded-admission) · [Persistent connection request lifecycle](#technique-persistent-connection).
+
+**Source.** [`kv-server/src/main.rs:189`](https://github.com/STEVVVU/io-uring-kv-server/blob/master/kv-server/src/main.rs#L189). [Back to execution flow](#execution-flow).
+
+<a id="flow-step-verification-history"></a>
+
+##### 12. Check concurrent history against a sequential oracle
+
+**Component.** kv-server/scripts/verify.py::linearizable. The independent verifier computes real-time predecessor constraints from operation intervals and recursively searches sequential MPUT/MGET histories against a plain-map specification, memoizing failed states. Its self-test accepts a consistent history and rejects a deliberately fractured snapshot; this is verification behavior, not a production server stage.
+
+**Techniques at this step.** [Concurrent history checking with a sequential oracle](#technique-history-oracle).
+
+**Source.** [`kv-server/scripts/verify.py:84`](https://github.com/STEVVVU/io-uring-kv-server/blob/master/kv-server/scripts/verify.py#L84) · [`kv-server/scripts/verify.py:120`](https://github.com/STEVVVU/io-uring-kv-server/blob/master/kv-server/scripts/verify.py#L120). [Back to execution flow](#execution-flow).
+
+<details>
+<summary>Scope and subsystem coverage</summary>
+
+Linux KV server startup through native io_uring, literal-loopback CLI validation, single-threaded accept/admission, persistent framed requests, bounded parsing and store operations, response writes, plus a separate concurrent-history verification oracle.
+
+- **Native execution and store ownership.** Linux startup explicitly chooses IoUringDriver; Monoio runtime completion polling and rent read/write loops are linked to service operations, while the Rc/RefCell store is shared by connection tasks on the local runtime. [Step 2](#flow-step-native-runtime), [Step 3](#flow-step-listener-state), [Step 4](#flow-step-accept-admit), [Step 8](#flow-step-store-dispatch), [Step 10](#flow-step-write-response).
+- **Protocol boundary.** Numeric loopback bind validation, length-prefixed reads/writes, bounded cursor parsing, and complete-input checks are traced at their actual callsites. [Step 1](#flow-step-cli-config), [Step 5](#flow-step-persistent-read-frame), [Step 7](#flow-step-parse-validate), [Step 10](#flow-step-write-response).
+- **Store operations.** MGET builds encoded results from the held store state; MPUT stages and accounts for all entries before publishing mutations. [Step 7](#flow-step-parse-validate), [Step 8](#flow-step-store-dispatch).
+- **Connection admission and lifecycle.** Accept-time connection rejection, pending-response RAII accounting, fixed/adaptive batch selection, 32-attempt limit sampling, and task completion release are represented. [Step 4](#flow-step-accept-admit), [Step 6](#flow-step-account-batch-limit), [Step 11](#flow-step-release-connection).
+- **Concurrent correctness verification.** The script's independent sequential-spec backtracking oracle is a separate verification workflow, not production execution. [Step 12](#flow-step-verification-history).
+
+Outside this flow audit:
+
+- `monoio/src/** except runtime.rs, driver/uring/mod.rs and the used rent read/write extensions`. Unrelated inherited runtime APIs, drivers, and examples are outside the active service call path.
+- `kv-server/scripts/benchmark.py`. Load measurement is not part of the protocol/store/runtime/admission/history-oracle workflow requested here.
+- `kv-server/src/main.rs rejected socket branch`. serve drops over-limit accepted sockets and continues its accept loop; this terminal branch has no connection task or response workflow.
+
+</details>
+
+<!-- execution-flow:end -->
+
+<details>
+<summary>Subsystem technique index</summary>
+
 ### Subsystem map
 
 Select a subsystem in the diagram to open its techniques, tradeoffs, and code references. The numbered links provide the same navigation. This map groups components; the execution diagrams show their runtime flow.
@@ -39,6 +329,8 @@ click s5 href "https://github.com/STEVVVU/io-uring-kv-server#subsystem-concurren
 This repository preserves Monoio and adds a bounded [loopback](#loopback-bind) key-value service in `kv-server/`. Monoio supplies the async runtime, TCP primitives, and native [io_uring](#io-uring) driver. The service owns its binary protocol, in-memory map, [atomic batches](#atomic-batch), and [admission control](#admission-control). It has no disk persistence and no epoll fallback.
 
 The diagram separates the service from its inherited runtime.
+
+</details>
 
 <details>
 <summary>Expand flow diagram 1</summary>
