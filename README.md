@@ -2,11 +2,123 @@
 
 ## Contents
 
+- [Implementation techniques](#implementation-techniques)
 - [Architecture and execution guide](#architecture-and-execution-guide)
 - [Design](#design)
 - [Measured results](#measured-results)
 - [Verify](#verify)
 - [Upstream README and licenses](README.upstream.md)
+
+## Implementation techniques
+
+This guide covers active `kv-server` paths and Monoio runtime operations they directly use. Rationale is inferred from current code. It makes no claim of durable storage, multicore execution, or general capacity.
+
+| Subsystem | Techniques and source |
+| --- | --- |
+| Runtime and ownership | [Completion-based asynchronous I/O](#technique-completion-io); [single-owner async execution](#technique-single-owner); [`main.rs`](kv-server/src/main.rs#L16), [`runtime.rs`](monoio/src/runtime.rs#L131), [`uring/mod.rs`](monoio/src/driver/uring/mod.rs#L343) |
+| Protocol boundary | [Length-prefixed framing](#technique-length-framing); [bounded full-input validation](#technique-full-validation); [loopback binding](#technique-loopback); [`main.rs`](kv-server/src/main.rs#L234), [`lib.rs`](kv-server/src/lib.rs#L15) |
+| Store | [Staged atomic MPUT and byte accounting](#technique-staged-mput); [snapshot MGET](#technique-snapshot-mget); [`lib.rs`](kv-server/src/lib.rs#L54) |
+| Admission and lifecycle | [Bounded connections and pending responses](#technique-bounded-admission); [windowed adaptive limits](#technique-adaptive-limits); [persistent connections](#technique-persistent-connection); [`main.rs`](kv-server/src/main.rs#L116) |
+| Verification | [Concurrent history checking with a sequential oracle](#technique-history-oracle); [`verify.py`](kv-server/scripts/verify.py) |
+
+<a id="technique-completion-io"></a>
+
+<details>
+<summary>Completion-based asynchronous I/O</summary>
+
+**Mechanism.** The service selects Monoio's `IoUringDriver`; reads and writes await kernel operation completion while the runtime polls futures and parks on the ring when needed. **Example.** `read_exact(vec![0; 4]).await` waits for a complete frame header. **Why here.** Network waits yield the task so the single runtime thread can service other tasks. **Tradeoffs.** Native Linux io_uring support and policy are required; setup errors do not fall back. Completion I/O does not imply disk persistence. **Code and ownership.** [main.rs](kv-server/src/main.rs#L16), [read_exact](monoio/src/io/async_read_rent_ext.rs#L45), [IoUringDriver](monoio/src/driver/uring/mod.rs#L343), [block_on](monoio/src/runtime.rs#L131). **Origin:** mixed.
+
+</details>
+
+<a id="technique-single-owner"></a>
+
+<details>
+<summary>Single-owner asynchronous execution</summary>
+
+**Mechanism.** One runtime thread owns `Rc<RefCell<Store>>` and policy counters. Tasks interleave at awaits, but synchronous store calls run without yielding, providing one serialization point. **Example.** A connection awaits a frame, calls `Store::execute`, then awaits the response write. **Why here.** The in-memory map needs no cross-thread lock in this execution model. **Tradeoffs.** A long synchronous operation occupies the runtime thread; no sharding or multicore claim applies. **Code and ownership.** [serve](kv-server/src/main.rs#L145), [connection](kv-server/src/main.rs#L234), [Store::execute](kv-server/src/lib.rs#L55). **Origin:** extension.
+
+</details>
+
+<a id="technique-length-framing"></a>
+
+<details>
+<summary>Length-prefixed TCP framing</summary>
+
+**Mechanism.** A four-byte big-endian length precedes each request. The server reads the header exactly, rejects zero or over-1-MiB frames, then reads that payload; responses use the same prefix. **Example.** Payload `01 00 01 61` is sent after `00 00 00 04`. **Why here.** TCP is a byte stream, so framing defines bounded parse units and permits repeated exchanges on one stream. **Tradeoffs.** Truncated reads end the connection; the cap bounds frame allocation but is not a general capacity guarantee. **Code and ownership.** [connection](kv-server/src/main.rs#L245), [MAX_FRAME_BYTES](kv-server/src/lib.rs#L4). **Origin:** extension.
+
+</details>
+
+<a id="technique-full-validation"></a>
+
+<details>
+<summary>Bounded full-input validation</summary>
+
+**Mechanism.** Cursor offsets use checked addition and slice bounds; keys, values, counts, and trailing bytes are validated. Batched payloads are fully parsed before admission or mutation. **Example.** A valid PUT plus one trailing byte returns malformed without changing the map. **Why here.** Invalid or ambiguous encodings cannot become partial operations. **Tradeoffs.** Parsing owns copied keys and values before execution. Validation is not authentication; this unauthenticated service remains loopback-only. **Code and ownership.** [Cursor](kv-server/src/lib.rs#L160), [Store::execute](kv-server/src/lib.rs#L55), [connection](kv-server/src/main.rs#L245). **Origin:** extension.
+
+</details>
+
+<a id="technique-loopback"></a>
+
+<details>
+<summary>Literal loopback binding</summary>
+
+**Mechanism.** CLI input parses as a literal `SocketAddr` and is accepted only when `ip().is_loopback()`. **Example.** `127.0.0.1:9000` is accepted; wildcard `0.0.0.0:9000` is rejected. **Why here.** The unauthenticated protocol is kept local. **Tradeoffs.** This does not authenticate local clients; remote service would need access control and transport security. **Code and ownership.** [parse_loopback_addr](kv-server/src/lib.rs#L15), [Config::from_args](kv-server/src/main.rs#L43). **Origin:** extension.
+
+</details>
+
+<a id="technique-staged-mput"></a>
+
+<details>
+<summary>Staged atomic MPUT with byte accounting</summary>
+
+**Mechanism.** MPUT parses all pairs, checks admission, stages entries, totals replaced bytes and new bytes, computes resulting entry count, and checks store bounds before inserting anything. Byte accounting is then updated once. Duplicate keys collapse in the staging map. **Example.** A batch that exceeds 64 MiB is rejected before either entry is inserted. **Why here.** Single-owner synchronous execution makes validation and commit indivisible relative to other tasks. **Tradeoffs.** Staging costs temporary memory; storage remains volatile. **Code and ownership.** [Store::execute MPUT arm](kv-server/src/lib.rs#L95). **Origin:** extension.
+
+</details>
+
+<a id="technique-snapshot-mget"></a>
+
+<details>
+<summary>Snapshot MGET response construction</summary>
+
+**Mechanism.** MGET parses and validates all keys before looking them up, then appends each value or missing marker into one response vector without awaiting or mutating the map. **Example.** A missing key is encoded as `0xffffffff`. **Why here.** The synchronous loop sees one store state for the whole batch in this single-owner runtime. **Tradeoffs.** Response memory grows with returned values; this is a batch observation, not cross-request database isolation or persistence. **Code and ownership.** [MGET arm](kv-server/src/lib.rs#L81), [put_value](kv-server/src/lib.rs#L150). **Origin:** extension.
+
+</details>
+
+<a id="technique-bounded-admission"></a>
+
+<details>
+<summary>Bounded connections and pending-response accounting</summary>
+
+**Mechanism.** Accept drops peers at the active connection limit. A separate RAII counter tracks a request only after its full payload arrives, decrementing on scope exit including early returns; idle sockets do not count as pending responses. **Example.** `PendingResponse::begin` increments and `Drop` releases the count. **Why here.** Socket occupancy and active response work are distinct quantities. **Tradeoffs.** Counters are local to one runtime thread and admission rejects by dropping a new peer; configured limits do not describe total machine capacity. **Code and ownership.** [serve](kv-server/src/main.rs#L145), [PendingResponse](kv-server/src/main.rs#L197), [connection](kv-server/src/main.rs#L234). **Origin:** extension.
+
+</details>
+
+<a id="technique-adaptive-limits"></a>
+
+<details>
+<summary>Windowed adaptive limits with hysteresis</summary>
+
+**Mechanism.** Every 32 attempts, more than eight rejections lowers the connection limit by at least one; zero or one raises it by at least one up to the configured ceiling; other counts hold steady. Batch admission maps pending occupancy to 32, 24, 16, or 8 items. **Example.** Low pending occupancy allows the full 32-item batch; high occupancy selects 8. **Why here.** Windowed discrete updates avoid reacting to each accept and adapt both connection and request limits. **Tradeoffs.** Threshold steps are coarse, not a capacity model; oversized batches are rejected, not queued or combined. **Code and ownership.** [adaptive_batch_limit](kv-server/src/lib.rs#L22), [next_connection_limit](kv-server/src/lib.rs#L31), [Admission::sample](kv-server/src/main.rs#L116). **Origin:** extension.
+
+</details>
+
+<a id="technique-persistent-connection"></a>
+
+<details>
+<summary>Persistent connection request lifecycle</summary>
+
+**Mechanism.** One task loops through header read, payload read, synchronous execution, and response write on the same stream. Read failure ends it; successful write returns to the next frame. The accept loop releases the active count when the task ends. **Example.** PUT and GET frames can share one TCP connection. **Why here.** Reusing a socket supports multiple exchanges under one admitted connection slot. **Tradeoffs.** Idle sockets occupy slots and blocked writes keep tasks alive; there is no request multiplexing protocol. **Code and ownership.** [serve](kv-server/src/main.rs#L145), [connection](kv-server/src/main.rs#L234). **Origin:** extension.
+
+</details>
+
+<a id="technique-history-oracle"></a>
+
+<details>
+<summary>Concurrent history checking with a sequential oracle</summary>
+
+**Mechanism.** The verifier records invocation/response intervals for concurrent MPUT/MGET calls and searches serial orderings consistent with real-time precedence against a sequential store specification. A deliberately fractured result is a negative control. **Example.** Every observed batch result must be explained by a legal ordering of overlapping writes and reads. **Why here.** This exercises concurrent behavior through the real TCP service, beyond isolated unit cases. **Tradeoffs.** Backtracking is bounded to small histories; finite passing cases do not prove every execution. **Code and ownership.** [linearizable](kv-server/scripts/verify.py#L84), [checker_self_test](kv-server/scripts/verify.py#L120), and the [concurrent history journey](kv-server/scripts/verify.py#L160) drive histories and the negative oracle. **Origin:** extension.
+
+</details>
 
 ## Architecture and execution guide
 
